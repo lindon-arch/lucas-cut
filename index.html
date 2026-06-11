@@ -813,7 +813,7 @@ function vSetup(){
       <button class="btn quiet" onclick="document.getElementById('importFile').click()">Import backup</button>
       <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)">
     </div>
-    <div class="note">Last export: <b style="color:var(--chalk)">${le?fmt(le):"never"}</b>. Data lives in this browser on this device, saved twice over for safety — but a cleared browser still wipes it. Export weekly; import on the other device to sync by hand.</div></div>
+    <div class="note">Backs up automatically about once a week — last: <b style="color:var(--chalk)">${le?fmt(le):"on next visit"}</b>. Data also lives in this browser, saved twice over. The auto-backup drops a file on your device; stash one copy somewhere safe (AirDrop or email it to yourself once) and you're covered even if the app is ever deleted. Import restores it on any device.</div></div>
   <div class="card"><div class="eyebrow">AI body-comp analysis</div>
     <div class="note" style="margin:0 0 9px">Paste your analysis endpoint (Cloudflare Worker URL) and app token to enable photo-based body-fat analysis. Leave blank to keep body comp fully offline (tape-measure only).</div>
     <input placeholder="https://lucas-cut-ai.<you>.workers.dev" value="${esc(p.aiEndpoint||"")}" onchange="setProfileStr('aiEndpoint',this.value)">
@@ -1107,8 +1107,24 @@ function render(){
   document.getElementById("main").innerHTML=views[tab]();
 }
 window.go=t=>{tab=t;q="";openFood=null;render();window.scrollTo({top:0});};
+
+/* hands-off backup: auto-export about once a week so there's always a recent file */
+function maybeAutoBackup(){
+  try{
+    const entries=data.fuelLog.length+data.weights.length+data.workouts.length+data.doses.length+data.body.length;
+    if(entries<8)return;                       // nothing worth backing up yet
+    const le=data.meta.lastExport;
+    const days=le?(new Date(today())-new Date(le))/864e5:999;
+    if(days<7)return;                          // backed up within the last week
+    if(sessionStorage.getItem("luca-autobk"))return; // once per session
+    sessionStorage.setItem("luca-autobk","1");
+    setTimeout(()=>{try{exportData();}catch(e){}},1500);
+  }catch(e){}
+}
+
 persist(data);render();
 loadPhotos().then(render).catch(()=>{});
+maybeAutoBackup();
 </script>
 <script>
 /* ============ ambient neural-thread background (decorative) ============ */
