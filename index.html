@@ -402,12 +402,13 @@ const LIB=[
 const LIBMAP={};LIB.forEach(f=>LIBMAP["b:"+f[0]]={id:"b:"+f[0],name:f[1],unit:f[2],p:f[3],c:f[4],cat:f[5]});
 
 const DEFAULT={
-  profile:{startWeight:200,goalWeight:170,proteinTarget:200,calorieTarget:2200,heightIn:69,aiEndpoint:"",aiToken:""},
+  profile:{startWeight:200,goalWeight:170,proteinTarget:200,calorieTarget:2200,heightIn:69,aiEndpoint:"",aiToken:"",syncId:"luca-main"},
   weights:[],waist:[],fuelLog:[],customFoods:[],
   favs:["b:chicken","b:beef","b:eggs","b:eggwhites","b:shake","b:greekyog"],
   workouts:[],doses:[],body:[],
   split:["Push","Pull","Legs","Rest","Upper","Lower","Rest"],
-  meta:{lastExport:null}
+  rot:{pos:0,since:""},
+  meta:{lastExport:null,updatedAt:0}
 };
 /* schema repair: fill anything missing so old backups & old versions always load */
 function repair(d){
@@ -419,6 +420,11 @@ function repair(d){
   if(typeof out.profile.heightIn!=="number"||!out.profile.heightIn)out.profile.heightIn=69;
   if(typeof out.profile.aiEndpoint!=="string")out.profile.aiEndpoint="";
   if(typeof out.profile.aiToken!=="string")out.profile.aiToken="";
+  if(typeof out.profile.syncId!=="string"||!out.profile.syncId)out.profile.syncId="luca-main";
+  if(!out.rot||typeof out.rot.pos!=="number")out.rot={pos:0,since:""};
+  if(out.rot.pos<0||out.rot.pos>6)out.rot.pos=0;
+  if(!out.rot.since)out.rot.since=new Date().toISOString().slice(0,10);
+  if(typeof out.meta.updatedAt!=="number")out.meta.updatedAt=0;
   if(!out.meta.seededBaseline){
     const bd=new Date().toISOString().slice(0,10);
     out.body.push({id:Date.now(),date:bd,bf:32,weight:200,method:"manual",
@@ -474,7 +480,55 @@ function backupStale(){
   if(!data.meta.lastExport)return true;
   return (new Date(today())-new Date(data.meta.lastExport))/864e5>21;
 }
-function save(){persist(data);render();}
+function save(){data.meta.updatedAt=Date.now();persist(data);cloudPush();render();}
+
+/* ============ split rotation — advances when he trains, not by calendar ============ */
+const addDaysStr=(d,n)=>{const x=new Date(d+"T12:00:00");x.setDate(x.getDate()+n);return x.toISOString().slice(0,10);};
+function rotResolve(){
+  if(!data.rot||typeof data.rot.pos!=="number")data.rot={pos:0,since:today()};
+  if(!data.rot.since)data.rot.since=today();
+  let changed=false,guard=0;
+  /* rest slots pass on their own as days elapse; lift slots wait until he logs */
+  while(data.split[data.rot.pos]==="Rest" && (new Date(today())-new Date(data.rot.since))/864e5>=1 && guard++<14){
+    data.rot.pos=(data.rot.pos+1)%7;
+    data.rot.since=addDaysStr(data.rot.since,1);
+    changed=true;
+  }
+  if(changed)persist(data);
+}
+function rotLiftIndex(){let i=data.rot.pos,g=0;while(data.split[i]==="Rest"&&g++<7)i=(i+1)%7;return i;}
+function rotSession(){return data.split[data.rot.pos];}     /* current slot (may be Rest) */
+function rotNextLift(){return data.split[rotLiftIndex()];}   /* next actual lift */
+function rotAdvance(){data.rot.pos=(rotLiftIndex()+1)%7;data.rot.since=today();}
+window.rotShift=n=>{
+  if(n>0){data.rot.pos=(rotLiftIndex()+1)%7;}
+  else{let i=(data.rot.pos+6)%7,g=0;while(data.split[i]==="Rest"&&g++<7)i=(i+6)%7;data.rot.pos=i;}
+  data.rot.since=today();save();
+};
+
+/* ============ cloud sync — shares the AI endpoint + token; last-write-wins ============ */
+let _syncTimer=null;
+function cloudBase(){const ep=data.profile.aiEndpoint||"";return ep?ep.replace(/\/analyze\/?$/,"/backup"):"";}
+function cloudId(){return ((data.profile.syncId||"luca-main").replace(/[^A-Za-z0-9_-]/g,"").slice(0,40))||"luca-main";}
+function cloudPush(){
+  const base=cloudBase();if(!base)return;
+  clearTimeout(_syncTimer);
+  _syncTimer=setTimeout(()=>{
+    fetch(base,{method:"POST",headers:{"content-type":"application/json","x-app-token":data.profile.aiToken||""},
+      body:JSON.stringify({id:cloudId(),data})}).then(()=>ss("synced")).catch(()=>{});
+  },2000);
+}
+async function cloudPull(){
+  const base=cloudBase();if(!base)return;
+  try{
+    const r=await fetch(base+"?id="+encodeURIComponent(cloudId()),{headers:{"x-app-token":data.profile.aiToken||""}});
+    if(!r.ok)return;
+    const j=await r.json();const rem=j&&j.data;
+    if(rem&&rem.meta&&(rem.meta.updatedAt||0)>(data.meta.updatedAt||0)){
+      data=repair(rem);persist(data);render();loadPhotos().then(render).catch(()=>{});ss("synced");
+    }
+  }catch(e){}
+}
 
 /* ============ chart ============ */
 function smoothPath(pts){
@@ -570,7 +624,9 @@ function vBoard(){
   const pT=data.profile.proteinTarget;
   const lastDose=[...data.doses].sort((a,b)=>b.date.localeCompare(a.date))[0];
   const dsd=lastDose?Math.floor((new Date(t)-new Date(lastDose.date))/864e5):null;
-  const plan=data.split[dowMon(t)];
+  const plan=rotSession();
+  const upLift=rotNextLift();
+  const restDay=plan==="Rest";
   const done=data.workouts.some(w=>w.date===t);
   const paceTxt=pace===null?"need ~2 weeks of data":
     pace<0?`${Math.abs(pace)} lb/wk — ${Math.abs(pace)>2?"too fast, muscle risk":"on pace"}`:"trending up";
@@ -625,9 +681,9 @@ function vBoard(){
 
   <div class="statgrid">
     <div class="card" style="margin:0">
-      <div class="eyebrow">Today's Session</div>
-      <div class="stat"><div class="n" style="font-size:32px;${plan==="Rest"?"color:var(--dim)":""}">${esc(plan)}</div>
-      <div class="c">${plan==="Rest"?"Off day — recover":done?'<span class="pill">✓ Logged</span>':"Not logged yet"}</div></div>
+      <div class="eyebrow">Up Next</div>
+      <div class="stat"><div class="n" style="font-size:32px;${restDay?"color:var(--dim)":""}">${esc(restDay?"Rest":upLift)}</div>
+      <div class="c">${restDay?("Recover · then "+esc(upLift)):(done?'<span class="pill">✓ logged today</span>':"Not logged — up next")}</div></div>
     </div>
     <div class="card" style="margin:0">
       <div class="eyebrow">Last Dose</div>
@@ -755,27 +811,37 @@ const DOW=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
 function vTraining(){
   const recent=[...data.workouts].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,14);
   const last7=Array.from({length:7},(_,i)=>{const d=new Date();d.setDate(d.getDate()-i);return d.toISOString().slice(0,10);});
-  const planned=last7.filter(d=>data.split[dowMon(d)]!=="Rest").length;
-  const done=last7.filter(d=>data.workouts.some(w=>w.date===d)).length;
-  const tdow=dowMon(today());
+  const doneW=last7.filter(d=>data.workouts.some(w=>w.date===d)).length;
+  const cur=data.rot.pos;
+  const upLift=rotNextLift();
+  const restDay=rotSession()==="Rest";
   return `
   <div class="card">
+    <div class="eyebrow">Up Next</div>
+    <div class="stat"><div class="n">${esc(restDay?"Rest":upLift)}</div>
+      <div class="c">${restDay?("Recover · then "+esc(upLift)):"Rotates as he trains — miss a day and it just waits right here."}</div></div></div>
+  <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:baseline">
-      <div class="eyebrow">Weekly Split</div>
-      <span class="pill ${done>=planned?"":"warn"}">${done}/${planned} this week</span>
+      <div class="eyebrow">The Split · rotation order</div>
+      <span class="pill">${doneW} ·7d</span>
     </div>
     <div class="splitgrid">
-      ${DOW.map((d,i)=>`<div><div class="dl">${d}</div><input value="${esc(data.split[i])}" onchange="setSplit(${i},this.value)" class="${i===tdow?"today-ring":""}" style="color:${data.split[i]==="Rest"?"var(--faint)":"var(--chalk)"}"></div>`).join("")}
+      ${DOW.map((d,i)=>`<div><div class="dl">${i+1}</div><input value="${esc(data.split[i])}" onchange="setSplit(${i},this.value)" class="${i===cur?"today-ring":""}" style="color:${data.split[i]==="Rest"?"var(--faint)":"var(--chalk)"}"></div>`).join("")}
     </div>
-    <div class="note">Type "Rest" for off days. Today is outlined.</div></div>
+    <div class="note">His fixed order — cycles top→bottom and repeats. The outlined one is up next. "Rest" slots are built-in off days that pass on their own. Editing the order never loses his place.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn quiet" onclick="rotShift(-1)">◀ Back</button>
+      <button class="btn quiet" onclick="rotShift(1)">Skip ▶</button>
+    </div>
+    <div class="note">Out of sync? Nudge what's up next.</div></div>
   <div class="card"><div class="eyebrow">Log a session</div>
     <div class="g2">
       <input type="date" id="tDate" value="${today()}">
-      <input id="tLabel" placeholder="label (blank = use split)">
+      <input id="tLabel" placeholder="${esc(upLift)} (blank = this)">
       <input id="tNote" class="full" placeholder="notes — top sets, PRs, how it felt">
     </div>
     <button class="btn block" onclick="addWorkout()">Log Session</button>
-    <div class="note">Strength held during a cut is muscle held during a cut. If the big lifts slide week over week, the deficit is too steep.</div></div>
+    <div class="note">Logging today advances the rotation to the next lift. Strength held during a cut is muscle held during a cut.</div></div>
   <div class="card"><div class="eyebrow">Recent</div>
     ${recent.length?recent.map(w=>`<div class="item"><span class="d">${fmt(w.date)}</span><span class="l">${esc(w.label)}${w.note?`<small> — ${esc(w.note)}</small>`:""}</span><button class="x" onclick="delWorkout(${w.id})">✕</button></div>`).join(""):'<div class="empty">Nothing yet.</div>'}
   </div>`;
@@ -814,12 +880,12 @@ function vSetup(){
       <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)">
     </div>
     <div class="note">Backs up automatically about once a week — last: <b style="color:var(--chalk)">${le?fmt(le):"on next visit"}</b>. Data also lives in this browser, saved twice over. The auto-backup drops a file on your device; stash one copy somewhere safe (AirDrop or email it to yourself once) and you're covered even if the app is ever deleted. Import restores it on any device.</div></div>
-  <div class="card"><div class="eyebrow">AI body-comp analysis</div>
-    <div class="note" style="margin:0 0 9px">Paste your analysis endpoint (Cloudflare Worker URL) and app token to enable photo-based body-fat analysis. Leave blank to keep body comp fully offline (tape-measure only).</div>
-    <input placeholder="https://lucas-cut-ai.<you>.workers.dev" value="${esc(p.aiEndpoint||"")}" onchange="setProfileStr('aiEndpoint',this.value)">
+  <div class="card"><div class="eyebrow">AI analysis & cloud sync</div>
+    <div class="note" style="margin:0 0 9px">Paste the analysis endpoint and app token to turn on AI photo body-fat reads <b style="color:var(--chalk)">and automatic cloud sync</b> — data backs up off-device and syncs across phones. Leave blank for offline-only.</div>
+    <input placeholder="https://lucas-cut-ai.vercel.app/api/analyze" value="${esc(p.aiEndpoint||"")}" onchange="setProfileStr('aiEndpoint',this.value)">
     <div style="height:8px"></div>
     <input placeholder="app token" value="${esc(p.aiToken||"")}" onchange="setProfileStr('aiToken',this.value)">
-    <div class="note">The token is a shared secret that lightly gates the proxy. The Anthropic key itself lives only in the Worker, never here.</div></div>
+    <div class="note">Sync code: <b style="color:var(--chalk)">${esc(p.syncId||"luca-main")}</b> — same code + endpoint on another device pulls the same data. The token lightly gates it; the AI key lives only on the server.</div></div>
   <div class="card"><div class="eyebrow">Danger zone</div>
     <button class="btn ghost" onclick="resetAll()">Reset all data</button></div>`;
 }
@@ -885,7 +951,10 @@ window.addWaist=()=>{const i=+val("waIn");if(!i)return;
   data.waist=data.waist.filter(w=>w.date!==val("waDate")).concat({date:val("waDate"),inches:i});save();};
 window.setSplit=(i,v)=>{data.split[i]=v.trim()||"Rest";save();};
 window.addWorkout=()=>{const d=val("tDate");
-  data.workouts.push({id:Date.now(),date:d,label:val("tLabel").trim()||data.split[dowMon(d)],note:val("tNote").trim()});save();};
+  const lbl=val("tLabel").trim()||rotNextLift();
+  data.workouts.push({id:Date.now(),date:d,label:lbl,note:val("tNote").trim()});
+  if(d===today())rotAdvance();
+  save();};
 window.delWorkout=id=>{data.workouts=data.workouts.filter(w=>w.id!==id);save();};
 window.addDose=()=>{const a=val("pAmt").trim();if(!a)return;
   data.doses.push({id:Date.now(),date:val("pDate"),amount:a,note:val("pNote").trim()});save();};
@@ -1101,6 +1170,7 @@ window.logAI=()=>{
 /* ============ render ============ */
 const TABS=[["board","Board"],["food","Food"],["weight","Weight"],["body","Comp"],["training","Train"],["peptide","Dose"],["setup","Setup"]];
 function render(){
+  rotResolve();
   document.getElementById("nav").innerHTML=TABS.map(([id,l])=>
     `<button class="${tab===id?"on":""}" onclick="go('${id}')">${l}</button>`).join("");
   const views={board:vBoard,food:vFood,weight:vWeight,body:vBodyComp,training:vTraining,peptide:vPeptide,setup:vSetup};
@@ -1124,6 +1194,7 @@ function maybeAutoBackup(){
 
 persist(data);render();
 loadPhotos().then(render).catch(()=>{});
+cloudPull();
 maybeAutoBackup();
 </script>
 <script>
