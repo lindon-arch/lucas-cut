@@ -270,6 +270,9 @@
   .ainote{font-size:13px;color:var(--dim);line-height:1.55;margin-top:8px}
   .ainote b{color:var(--chalk)}
 
+  .vh{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+  label.btn,label.btn.quiet{display:flex;align-items:center;justify-content:center;cursor:pointer}
+
   main{animation:fadein .3s ease}
   @keyframes fadein{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -777,18 +780,14 @@ function vFood(){
 
   <div class="card">
     <div class="eyebrow">Snap or describe a meal</div>
-    ${aiOn?`
-      <input id="foodDesc" placeholder="e.g. blackened chicken sandwich from Main Course, New Paltz">
-      <div class="row" style="margin-top:8px">
-        <button class="btn" onclick="estimateFood()">Estimate macros</button>
-        <button class="btn quiet" onclick="document.getElementById('foodPhoto').click()">📷 Photo</button>
-        <input type="file" id="foodPhoto" accept="image/*" capture="environment" style="display:none" onchange="estimateFoodPhoto(this)">
-      </div>
-      <div class="note" style="margin-top:8px">It estimates calories + protein and shows what it assumed — check it, tweak if needed, then log.</div>
-      <div id="foodAiOut" class="aiout"></div>
-    `:`
-      <div class="note" style="margin:0">Add the AI endpoint in <b style="color:var(--chalk);cursor:pointer" onclick="go('setup')">Setup</b> to turn this on — then describe or photograph a meal and it fills in the macros.</div>
-    `}
+    <input id="foodDesc" placeholder="e.g. blackened chicken sandwich from Main Course, New Paltz">
+    <div class="row" style="margin-top:8px">
+      <button class="btn" onclick="estimateFood()">Estimate macros</button>
+      <label class="btn quiet" for="foodPhoto">📷 Photo</label>
+      <input type="file" id="foodPhoto" accept="image/*" class="vh" onchange="estimateFoodPhoto(this)">
+    </div>
+    <div class="note" style="margin-top:8px">${aiOn?"It estimates calories + protein and shows what it assumed — check it, tweak if needed, then log.":'<b style="color:var(--orange)">Set up first:</b> tap <b style="color:var(--chalk);cursor:pointer" onclick="go(\'setup\')">Setup</b> and paste the two lines to turn this on.'}</div>
+    <div id="foodAiOut" class="aiout"></div>
   </div>
 
   <div class="card"><div class="eyebrow">Logged today</div>
@@ -893,8 +892,8 @@ function vSetup(){
   <div class="card"><div class="eyebrow">Backups</div>
     <div class="row">
       <button class="btn quiet" onclick="exportData()">Export backup</button>
-      <button class="btn quiet" onclick="document.getElementById('importFile').click()">Import backup</button>
-      <input type="file" id="importFile" accept=".json" style="display:none" onchange="importData(this)">
+      <label class="btn quiet" for="importFile">Import backup</label>
+      <input type="file" id="importFile" accept=".json" class="vh" onchange="importData(this)">
     </div>
     <div class="note">Backs up automatically about once a week — last: <b style="color:var(--chalk)">${le?fmt(le):"on next visit"}</b>. Data also lives in this browser, saved twice over. The auto-backup drops a file on your device; stash one copy somewhere safe (AirDrop or email it to yourself once) and you're covered even if the app is ever deleted. Import restores it on any device.</div></div>
   <div class="card"><div class="eyebrow">AI analysis & cloud sync</div>
@@ -1077,8 +1076,8 @@ function vBodyComp(){
       <select id="photoView" style="flex:0 0 110px">
         <option value="front">Front</option><option value="side">Side</option><option value="back">Back</option>
       </select>
-      <button class="btn" onclick="document.getElementById('photoFile').click()">Add photo</button>
-      <input type="file" id="photoFile" accept="image/*" capture="environment" style="display:none" onchange="onPhotoPick(this)">
+      <label class="btn" for="photoFile">Add photo</label>
+      <input type="file" id="photoFile" accept="image/*" class="vh" onchange="onPhotoPick(this)">
     </div>
     <div class="note" style="margin-top:8px">Stored only on this device — photos never leave the phone unless you tap Analyze.</div>
     ${todays.length?`<div class="sectionlbl">Added today</div><div class="thumbs">${todays.map(p=>`<div class="thumb"><img src="${p.dataUrl}" alt="${esc(p.view)}"><span class="tv">${esc(p.view)}</span><button class="thx" onclick="removePhoto(${p.id})" aria-label="delete">✕</button></div>`).join("")}</div>`:""}
@@ -1207,8 +1206,9 @@ window.estimateFoodPhoto=input=>{
   reader.readAsDataURL(file);
 };
 async function foodAi(req){
-  const ep=(data.profile.aiEndpoint||"").replace(/\/analyze\/?$/,"/food");if(!ep)return;
   const out=document.getElementById("foodAiOut");
+  const ep=(data.profile.aiEndpoint||"").replace(/\/analyze\/?$/,"/food");
+  if(!ep){if(out)out.innerHTML='<div class="note" style="color:var(--orange)">Not set up on this device yet — tap <b style="color:var(--chalk);cursor:pointer" onclick="go(\'setup\')">Setup</b> and paste the two lines first.</div>';return;}
   if(out)out.innerHTML='<div class="note">Estimating…</div>';
   try{
     const r=await fetch(ep,{method:"POST",headers:{"content-type":"application/json","x-app-token":data.profile.aiToken||""},body:JSON.stringify(req)});
