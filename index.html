@@ -722,6 +722,7 @@ function vFood(){
   const searching=!!ql;
   const filtered=searching?foods.filter(f=>f.name.toLowerCase().includes(ql)):foods;
   const favs=filtered.filter(f=>data.favs.includes(f.id));
+  const aiOn=!!data.profile.aiEndpoint;
 
   let libraryHTML;
   if(searching){
@@ -772,6 +773,22 @@ function vFood(){
       <button class="btn block" onclick="addCustomFood()">Save Food</button>
       <div class="note">Saved foods are searchable, starrable, and filed in the category you pick.</div>
     </details>
+  </div>
+
+  <div class="card">
+    <div class="eyebrow">Snap or describe a meal</div>
+    ${aiOn?`
+      <input id="foodDesc" placeholder="e.g. blackened chicken sandwich from Main Course, New Paltz">
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="estimateFood()">Estimate macros</button>
+        <button class="btn quiet" onclick="document.getElementById('foodPhoto').click()">📷 Photo</button>
+        <input type="file" id="foodPhoto" accept="image/*" capture="environment" style="display:none" onchange="estimateFoodPhoto(this)">
+      </div>
+      <div class="note" style="margin-top:8px">It estimates calories + protein and shows what it assumed — check it, tweak if needed, then log.</div>
+      <div id="foodAiOut" class="aiout"></div>
+    `:`
+      <div class="note" style="margin:0">Add the AI endpoint in <b style="color:var(--chalk);cursor:pointer" onclick="go('setup')">Setup</b> to turn this on — then describe or photograph a meal and it fills in the macros.</div>
+    `}
   </div>
 
   <div class="card"><div class="eyebrow">Logged today</div>
@@ -1165,6 +1182,59 @@ window.logAI=()=>{
     fatDistribution:d.fatDistribution||"",muscleByRegion:d.muscleByRegion||"",summary:d.summary||"",
     confidence:d.confidence||"",photoIds:L.photoIds||[]});
   window._lastAI=null;save();
+};
+
+/* ============ AI meal logging — describe or photograph a meal ============ */
+window.estimateFood=()=>{
+  const text=val("foodDesc").trim();
+  const out=document.getElementById("foodAiOut");
+  if(!text){if(out)out.innerHTML='<div class="note">Type what he ate, or tap Photo.</div>';return;}
+  foodAi({text});
+};
+window.estimateFoodPhoto=input=>{
+  const file=input.files&&input.files[0];input.value="";if(!file)return;
+  const reader=new FileReader();
+  reader.onload=()=>{const img=new Image();
+    img.onload=()=>{
+      const max=1080,sc=Math.min(1,max/Math.max(img.width,img.height));
+      const cw=Math.round(img.width*sc),ch=Math.round(img.height*sc);
+      const cv=document.createElement("canvas");cv.width=cw;cv.height=ch;
+      cv.getContext("2d").drawImage(img,0,0,cw,ch);
+      const url=cv.toDataURL("image/jpeg",0.82);
+      foodAi({images:[{media_type:"image/jpeg",data:url.slice(url.indexOf(",")+1)}],text:val("foodDesc").trim()});
+    };
+    img.onerror=()=>alert("Couldn't read that image.");img.src=reader.result;};
+  reader.readAsDataURL(file);
+};
+async function foodAi(req){
+  const ep=(data.profile.aiEndpoint||"").replace(/\/analyze\/?$/,"/food");if(!ep)return;
+  const out=document.getElementById("foodAiOut");
+  if(out)out.innerHTML='<div class="note">Estimating…</div>';
+  try{
+    const r=await fetch(ep,{method:"POST",headers:{"content-type":"application/json","x-app-token":data.profile.aiToken||""},body:JSON.stringify(req)});
+    const d=await r.json();
+    if(!r.ok||d.error){if(out)out.innerHTML=`<div class="note" style="color:var(--red)">Couldn't estimate (${esc(String(d.error||r.status))}).</div>`;return;}
+    window._foodAI={name:(req.text||d.dish||"Meal")};
+    const items=(d.items||[]).map(it=>`<div class="airow"><span class="k">${esc(it.name)}</span><span class="vv">${Math.round(it.protein)}g · ${Math.round(it.calories)}</span></div>`).join("");
+    if(out)out.innerHTML=`<div class="aicard">
+      <div style="font-family:var(--disp);font-weight:700;letter-spacing:.04em;color:var(--chalk);margin-bottom:6px">${esc(d.dish||"Meal")} <span style="color:var(--faint);font-size:12px">· ${esc(d.confidence||"")} confidence</span></div>
+      ${items}
+      <div class="airow" style="border-top:1px solid var(--line-hi);margin-top:4px;padding-top:8px"><span class="k" style="color:var(--cyan)">Total</span><span class="vv"><span class="o">${Math.round(d.totalProtein)}g</span> · ${Math.round(d.totalCalories)} kcal</span></div>
+      <div class="ainote"><b>Assumed:</b> ${esc(d.assumptions||"")}</div>
+      <div class="g2" style="margin-top:10px">
+        <div><div class="note" style="margin:0 0 4px">Protein (g)</div><input type="number" inputmode="numeric" id="faP" value="${Math.round(d.totalProtein)}"></div>
+        <div><div class="note" style="margin:0 0 4px">Calories</div><input type="number" inputmode="numeric" id="faC" value="${Math.round(d.totalCalories)}"></div>
+      </div>
+      <button class="btn block" onclick="logFoodAI()">Log it — adjust above first if needed</button>
+    </div>`;
+  }catch(e){if(out)out.innerHTML='<div class="note" style="color:var(--red)">Couldn’t reach the estimator.</div>';}
+}
+window.logFoodAI=()=>{
+  const p=parseFloat(val("faP"))||0,c=parseFloat(val("faC"))||0;
+  if(!p&&!c)return;
+  const name=((window._foodAI&&window._foodAI.name)||"Meal").slice(0,60);
+  data.fuelLog.push({id:Date.now(),date:today(),name,qty:1,p,c});
+  window._foodAI=null;save();
 };
 
 /* ============ render ============ */

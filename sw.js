@@ -1,6 +1,6 @@
 // Luca's Cut service worker — offline app shell.
 // Bump CACHE when index.html or icons change to force an update.
-const CACHE = 'lucas-cut-v5';
+const CACHE = 'lucas-cut-v6';
 const ASSETS = [
   './',
   './index.html',
