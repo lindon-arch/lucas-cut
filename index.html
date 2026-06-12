@@ -528,7 +528,8 @@ async function cloudPull(){
     if(!r.ok)return;
     const j=await r.json();const rem=j&&j.data;
     if(rem&&rem.meta&&(rem.meta.updatedAt||0)>(data.meta.updatedAt||0)){
-      data=repair(rem);persist(data);render();loadPhotos().then(render).catch(()=>{});ss("synced");
+      const keep={aiEndpoint:data.profile.aiEndpoint,aiToken:data.profile.aiToken,syncId:data.profile.syncId};
+      data=repair(rem);Object.assign(data.profile,keep);persist(data);render();loadPhotos().then(render).catch(()=>{});ss("synced");
     }
   }catch(e){}
 }
@@ -898,9 +899,10 @@ function vSetup(){
     <div class="note">Backs up automatically about once a week — last: <b style="color:var(--chalk)">${le?fmt(le):"on next visit"}</b>. Data also lives in this browser, saved twice over. The auto-backup drops a file on your device; stash one copy somewhere safe (AirDrop or email it to yourself once) and you're covered even if the app is ever deleted. Import restores it on any device.</div></div>
   <div class="card"><div class="eyebrow">AI analysis & cloud sync</div>
     <div class="note" style="margin:0 0 9px">Paste the analysis endpoint and app token to turn on AI photo body-fat reads <b style="color:var(--chalk)">and automatic cloud sync</b> — data backs up off-device and syncs across phones. Leave blank for offline-only.</div>
-    <input placeholder="https://lucas-cut-ai.vercel.app/api/analyze" value="${esc(p.aiEndpoint||"")}" onchange="setProfileStr('aiEndpoint',this.value)">
+    <input placeholder="https://lucas-cut-ai.vercel.app/api/analyze" value="${esc(p.aiEndpoint||"")}" oninput="setCfg('aiEndpoint',this.value)" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
     <div style="height:8px"></div>
-    <input placeholder="app token" value="${esc(p.aiToken||"")}" onchange="setProfileStr('aiToken',this.value)">
+    <input placeholder="app token" value="${esc(p.aiToken||"")}" oninput="setCfg('aiToken',this.value)" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false">
+    <div class="note" style="margin-top:9px">${p.aiEndpoint?'<b style="color:var(--green)">● AI is ON</b> — saved on this device. Switch tabs and back to confirm.':'<b style="color:var(--orange)">● Off</b> — paste both lines above. They save as you type.'}</div>
     <div class="note">Sync code: <b style="color:var(--chalk)">${esc(p.syncId||"luca-main")}</b> — same code + endpoint on another device pulls the same data. The token lightly gates it; the AI key lives only on the server.</div></div>
   <div class="card"><div class="eyebrow">Danger zone</div>
     <button class="btn ghost" onclick="resetAll()">Reset all data</button></div>`;
@@ -977,6 +979,8 @@ window.addDose=()=>{const a=val("pAmt").trim();if(!a)return;
 window.delDose=id=>{data.doses=data.doses.filter(d=>d.id!==id);save();};
 window.setProfile=(k,v)=>{data.profile[k]=+v||0;save();};
 window.setProfileStr=(k,v)=>{data.profile[k]=(v||"").trim();save();};
+/* config fields save instantly on every keystroke/paste (no re-render) so mobile paste always sticks */
+window.setCfg=(k,v)=>{data.profile[k]=(v||"").trim();data.meta.updatedAt=Date.now();persist(data);cloudPush();};
 window.resetAll=()=>{if(!confirm("Wipe everything? This deletes all logs."))return;
   data=repair({});save();};
 window.exportData=()=>{
